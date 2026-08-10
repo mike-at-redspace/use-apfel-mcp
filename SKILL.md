@@ -40,13 +40,19 @@ If a code file, log, or doc/URL content is going to land in context and it's mor
 | Config file (`.json`) | `scripts/ast-skeleton.py` | Full file → top-level keys + dependency names, boilerplate dropped |
 | Log/build output | `scripts/log-filter.py` | Raw log → deduped errors, warnings, final status, timeline |
 | Long doc/article | `scripts/relevance-rank.py "<query>"` | Full doc → top 3 paragraphs matching the query, scored |
-| PDF/Office/HTML | [`markitdown`](https://github.com/microsoft/markitdown) | Convert to markdown *first*, then pipe that into `relevance-rank.py`/`ast-skeleton.py` above — not stdlib, install separately (README) |
+| PDF/Office/HTML | [`markitdown`](https://github.com/microsoft/markitdown) *(if installed — check below)* | Convert to markdown *first*, then pipe that into `relevance-rank.py`/`ast-skeleton.py` above |
 
 ```bash
 cat src/Button.tsx | python3 ~/.claude/skills/use-apfel-mcp/scripts/ast-skeleton.py
 python3 ~/.claude/skills/use-apfel-mcp/scripts/log-filter.py build.log
 python3 ~/.claude/skills/use-apfel-mcp/scripts/relevance-rank.py "OKLCH color config" < docs.md
 markitdown design-spec.pdf | python3 ~/.claude/skills/use-apfel-mcp/scripts/relevance-rank.py "OKLCH color config"
+```
+
+**Before touching a PDF/Office/HTML file, check once per session:** `command -v markitdown`. Found → use it, as above, no need to ask. Not found → say so in one line and point at the install command below — don't silently fall back to reading the raw binary/HTML, and don't install it yourself without asking (it's a real dependency, not stdlib).
+
+```bash
+command -v markitdown >/dev/null && echo "markitdown: available" || echo "markitdown: not installed — pipx install markitdown"
 ```
 
 Each is stdlib-only (no YAML support — Python has no stdlib YAML parser, so `.yml`/`.yaml` fall back to raw), pipe-friendly (stdin or file-path arg), <100ms on typical input.

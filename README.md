@@ -55,7 +55,7 @@ python3 scripts/log-filter.py build.log
 python3 scripts/relevance-rank.py "OKLCH color config" < docs.md
 ```
 
-For PDF/Office/HTML input, the scripts expect text/markdown — pipe through [`markitdown`](https://github.com/microsoft/markitdown) first (`pipx install markitdown`, not bundled here).
+For PDF/Office/HTML input, the scripts expect text/markdown — pipe through [`markitdown`](https://github.com/microsoft/markitdown) first. The skill checks `command -v markitdown` before reaching for it and uses it automatically if present; if it's missing you'll get a one-line nudge instead of a silent raw-binary read. Not bundled here — `pipx install markitdown` to add it.
 
 ## Limitations, up front
 
