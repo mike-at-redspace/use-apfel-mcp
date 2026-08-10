@@ -1,85 +1,75 @@
 ---
 name: use-apfel-mcp
-description: Use when operating under a tight or on-device token budget (~4096 tokens, "apfel"/Apple on-device model), when the user asks to save tokens or cut context/API cost, or when caveman/terse mode is active — compress local files/logs/docs before they enter context, offload trivial single-file lookups to apfel directly, and (if apfel-mcp tools exist) route fetches through the minimal-token tool with hard call/output caps.
+description: Use when operating under a tight or on-device token budget (~4096 tokens, "apfel"/Apple on-device model), when the user asks to save tokens or cut context/API cost, when caveman/terse mode is active, when a task touches secrets/credentials/PII that shouldn't reach a cloud model, or when the same lightweight transform needs to run over many items in a loop — compress local files/logs/docs before they enter context, offload trivial or sensitive tasks to apfel directly, and (if apfel-mcp tools exist) route fetches through the minimal-token tool with hard call/output caps.
 ---
 
 # use-apfel-mcp
 
-Token-efficient reading, delegation, and tool routing for tight/on-device (~4096-token) budgets. Applies whether or not `apfel-mcp` tools are actually connected — the compression step below is tool-agnostic.
+Token-efficient reading, delegation, and tool routing for tight/on-device (~4096-token) budgets — works whether or not `apfel-mcp` tools are connected.
 
-Built for [**apfel**](https://github.com/Arthur-Ficial/apfel) (Apple Intelligence from the command line — on-device via `FoundationModels`, no API keys, no cloud) and [**apfel-mcp**](https://github.com/Arthur-Ficial/apfel-mcp) (its token-budget MCP tools), both by [Arthur Ficial](https://github.com/Arthur-Ficial). `brew info apfel` / `brew info apfel-mcp` for install; homepage [apfel.franzai.com](https://apfel.franzai.com). Per-tool cheatsheets (exact invocation text, examples, caveats) live in [`references/`](references/) — this file covers the decision rules.
+Built for [**apfel**](https://github.com/Arthur-Ficial/apfel) + [**apfel-mcp**](https://github.com/Arthur-Ficial/apfel-mcp), both by [Arthur Ficial](https://github.com/Arthur-Ficial). `brew install apfel` / `brew install arthur-ficial/tap/apfel-mcp`. Per-tool cheatsheets live in [`references/`](references/) — this file is the decision rules.
 
-## Delegate trivial tasks to apfel entirely
+## Delegate whole tasks to apfel
 
-This is the token-saving move, distinct from the preprocessing below: for a bounded task that doesn't need multi-file reasoning or judgment about this repo's conventions, hand the whole thing to `apfel` instead of spending the main model's tokens on it. Two shapes of task qualify:
+For a bounded task that needs no multi-file reasoning and no judgment about this repo, hand it to `apfel` instead of spending the primary model's tokens.
 
-- **Retrieval** — a single-file/log/doc lookup. `apfel -f <path> "<question>"` for a known local path (see [`references/apfel-cli.md`](references/apfel-cli.md)).
-- **Generation from what's already on screen** — drafting where apfel doesn't need to understand the repo, just transform the input in front of it:
+| Trigger | Action |
+| :--- | :--- |
+| Single-file/log/doc lookup | `apfel -f <path> "<question>"` |
+| User asked to save tokens/cost | Delegate automatically, no need to ask each time — say what got delegated |
+| Caveman/terse mode active | Ask once per session before delegating — terse ≠ "hand this to another model" |
+| Content is sensitive (secrets, `.env`, credentials, PII, medical/financial) | Delegate automatically *regardless of budget* — the point is nothing leaves the machine, not cost |
+| Same transform over hundreds of items | Loop `apfel` in a shell script, not N primary-model calls — avoids rate limits too |
+| Branch diff too big for apfel's 4096 tokens *and* too big to read raw | Don't skip apfel — chunk it: `scripts/diff-chunk.sh main...HEAD` skeletons new files, delegates each modified file's own diff individually, leaves small diffs in `--stat`, then runs a *second* apfel pass to group the resulting one-liners into categories. Grouping the summaries is still text-on-text, not codebase reasoning — only skip apfel for a step that needs real repo judgment (e.g. "is this breaking"). |
+| Multi-file reasoning, edits, judgment calls, **or writing actual code** | Keep on the primary model — apfel has a 4096-token window, no memory of this repo, and shouldn't author code that ships (correctness stakes, not a draft-and-review task) |
 
-  | Task | Command |
-  | :--- | :--- |
-  | Commit message from staged diff | `git diff --staged \| apfel "Write a conventional commit message for this diff. Output only the message."` |
-  | PR/release-notes draft from commit log | `git log v1.0.0..v1.1.0 --oneline \| apfel "Group these into Features, Bug Fixes, Refactoring"` |
-  | Regex from a plain-English description | `apfel "Regex matching a US phone number, formats (555) 123-4567 and 555-123-4567"` |
-  | Terminal error explainer | `cargo build 2>&1 \| apfel "Explain why this failed in 2 sentences"` |
-  | Short rewrite/rephrase | `echo "$text" \| apfel "Make this more concise"` |
+**Generation from what's already on screen** — bounded drafts, still reviewed before they ship:
 
-  Treat these as a *draft*, not a final answer — a commit message or PR description still needs your review before it ships, same as anything else generated. Don't delegate the parts that need project-specific judgment: a PR description that must match this repo's template, reference a specific ticket, or explain *why* a change was made (not just what changed) stays on the main model, which actually has that context.
+| Task | Command |
+| :--- | :--- |
+| Commit message from staged diff | `git diff --staged \| apfel "Write a conventional commit message. Output only the message."` |
+| Diff review against team conventions | `git diff HEAD~1 \| apfel -f CONVENTIONS.md "Review this diff against our conventions"` |
+| Release notes from commit log | `git log v1.0.0..v1.1.0 --oneline \| apfel "Group into Features, Bug Fixes, Refactoring"` |
+| Explain a failed build | `npm run build 2>&1 \| apfel "Explain why this failed in 2 sentences"` |
+| JSON API response → TypeScript interface | `curl -s api.example.com/item/1 \| apfel --code "TS interface named Item for this JSON"` |
+| Regex from plain English | `apfel "Regex for a US phone number, both (555) 123-4567 and 555-123-4567"` |
 
-- **User explicitly asked to save tokens/cost, and `apfel` is installed:** do either automatically, no need to ask each time — say in one line what got delegated so the split is visible.
-- **Caveman/terse mode is active:** ask once per session — *"Want me to route trivial lookups/drafts through apfel to save tokens while caveman mode's on?"* Caveman mode means "be terse," not "hand this off to a different model," so it's an ask, not an assumption.
-- **Keep on the main model:** multi-file reasoning, anything that edits code, anything needing judgment about this codebase's conventions or history. `apfel`'s on-device model has a 4096-token window and no memory of this repo — don't delegate what needs either.
+All verified against `apfel`'s real flags/[EXAMPLES.md](https://github.com/Arthur-Ficial/apfel/tree/main/docs/EXAMPLES.md) — `-f` attaches file(s) to a prompt, `--code` returns bare code (exit 7 if empty), `--schema` guarantees valid JSON, `-o json` for scripting. See [`references/apfel-cli.md`](references/apfel-cli.md).
 
-## Preprocess before reading raw — always, regardless of which tool fetched it
+## Preprocess before reading raw
 
-If a code file, log, or doc/URL content is going to land in context and it's more than ~1-2k chars, don't `cat`/`Read` it whole and don't hand-roll a `grep`/`sed` one-liner — pipe it through the matching script first. They give consistent, structured output (deduped errors, scored paragraphs, clean signatures) instead of ad hoc line matches:
+Content over ~1-2k chars headed into context: pipe it through the matching script, not a raw `cat`/`Read` or a hand-rolled `grep`/`sed`.
 
-| Input | Tool | Effect |
-| :--- | :--- | :--- |
-| Code file (py/ts/js) | `scripts/ast-skeleton.py` | Full file → signatures/exports/imports only (~150 tokens) |
-| Config file (`.json`) | `scripts/ast-skeleton.py` | Full file → top-level keys + dependency names, boilerplate dropped |
-| Log/build output | `scripts/log-filter.py` | Raw log → deduped errors, warnings, final status, timeline |
-| Long doc/article | `scripts/relevance-rank.py "<query>"` | Full doc → top 3 paragraphs matching the query, scored |
-| PDF/Office/HTML | [`markitdown`](https://github.com/microsoft/markitdown) *(if installed — check below)* | Convert to markdown *first*, then pipe that into `relevance-rank.py`/`ast-skeleton.py` above |
-
-```bash
-cat src/Button.tsx | python3 ~/.claude/skills/use-apfel-mcp/scripts/ast-skeleton.py
-python3 ~/.claude/skills/use-apfel-mcp/scripts/log-filter.py build.log
-python3 ~/.claude/skills/use-apfel-mcp/scripts/relevance-rank.py "OKLCH color config" < docs.md
-markitdown design-spec.pdf | python3 ~/.claude/skills/use-apfel-mcp/scripts/relevance-rank.py "OKLCH color config"
-```
-
-**Before touching a PDF/Office/HTML file, check once per session:** `command -v markitdown`. Found → use it, as above, no need to ask. Not found → say so in one line and point at the install command below — don't silently fall back to reading the raw binary/HTML, and don't install it yourself without asking (it's a real dependency, not stdlib).
+| Input | Tool |
+| :--- | :--- |
+| Code or JSON file | `scripts/ast-skeleton.py` — signatures/exports/deps only (~150 tokens); regex fallback on syntax errors |
+| Log/build output | `scripts/log-filter.py` — deduped errors, warnings, final status, timeline |
+| Long doc/article | `scripts/relevance-rank.py "<query>"` — top 3 paragraphs, scored |
+| PDF/Office/HTML | `command -v markitdown` first — found → pipe through it into the scripts above; missing → say so in one line, don't silently read the raw binary, don't auto-install |
 
 ```bash
-command -v markitdown >/dev/null && echo "markitdown: available" || echo "markitdown: not installed — pipx install markitdown"
+cat src/Button.tsx | python3 scripts/ast-skeleton.py
+python3 scripts/log-filter.py build.log
+python3 scripts/relevance-rank.py "OKLCH color config" < docs.md
+markitdown design-spec.pdf | python3 scripts/relevance-rank.py "OKLCH color config"
 ```
 
-Each is stdlib-only (no YAML support — Python has no stdlib YAML parser, so `.yml`/`.yaml` fall back to raw), pipe-friendly (stdin or file-path arg), <100ms on typical input.
+Stdlib-only (no YAML — no stdlib parser), pipe-friendly, <100ms typical. Skip when content's already short, or you need an exact-line edit (a skeleton drops line numbers/bodies).
 
-**Skip preprocessing when:**
-- Content is already short enough that raw wouldn't blow the budget.
-- You need to make an exact edit at a known line (e.g. "fix line 42") — a skeleton throws away the line numbers and body you need to edit.
+## If apfel-mcp tools are present, route through them
 
-## If apfel-mcp tools are present, also route through them
-
-`apfel-mcp` (`brew install arthur-ficial/tap/apfel-mcp`) installs four real MCP servers with these literal names — `apfel-mcp-url-fetch`, `apfel-mcp-ddg-search` (out of scope here, see below), `apfel-mcp-search-and-fetch`, `apfel-mcp-fs`. In a given session they may show up under a different MCP-server prefix (e.g. this environment exposes the same search-and-fetch behavior as `mcp__search-and-fetch__search`) and **often deferred** (won't show in a plain tool listing) — before assuming none are connected, run `ToolSearch` for keywords like `apfel`, `search-and-fetch`, or `4096`, don't just scan the visible tool list. `apfel-mcp-ddg-search` is explicitly excluded from this skill's routing — deliberately out of scope, not an oversight.
+`apfel-mcp` installs four real MCP servers: `apfel-mcp-search-and-fetch`, `apfel-mcp-url-fetch`, `apfel-mcp-fs`, `apfel-mcp-ddg-search` (deliberately excluded from this routing). Names may show up under a different MCP-server prefix per session (e.g. `mcp__search-and-fetch__search`) and are often deferred — `ToolSearch` for `apfel`/`search-and-fetch`/`4096` before assuming none are connected.
 
 | Scenario | Tool | Limit | Cheatsheet |
 | :--- | :--- | :--- | :--- |
-| Search web + read page | `apfel-mcp-search-and-fetch` (e.g. `mcp__search-and-fetch__search`) | 1 call instead of 2. Cap ~5k chars. | [`references/apfel-mcp-search-and-fetch.md`](references/apfel-mcp-search-and-fetch.md) |
-| Known URL | `apfel-mcp-url-fetch` | Strip DOM bloat. Cap 6k chars. | [`references/apfel-mcp-url-fetch.md`](references/apfel-mcp-url-fetch.md) |
-| Local log/code/config | `apfel-mcp-fs` | Read-only, 6k-char cap, allowlisted — see cheatsheet. | [`references/apfel-mcp-fs.md`](references/apfel-mcp-fs.md) |
+| Search + read page | `apfel-mcp-search-and-fetch` | 1 call not 2, ~5k chars | [search-and-fetch](references/apfel-mcp-search-and-fetch.md) |
+| Known URL | `apfel-mcp-url-fetch` | Strips DOM, 6k chars | [url-fetch](references/apfel-mcp-url-fetch.md) |
+| Local file/log/config | `apfel-mcp-fs` | Read-only, 6k chars, allowlisted | [fs](references/apfel-mcp-fs.md) |
 
-Every cheatsheet above includes the exact prompt text to use — naming the real tool explicitly matters, since the small on-device model sometimes invents a plausible-but-wrong tool name from loose natural language (symptom: `No MCP server provides tool 'X'`, where `X` isn't in the `mcp: ... - <tool>` line printed at startup).
+Name the real tool explicitly in any prompt to these — the small model invents a plausible-but-wrong tool name from vague phrasing (symptom: `No MCP server provides tool 'X'`).
 
-**Hard rules:**
-1. **Max 2 tool calls per turn.** Never loop searches.
-2. **No retries** on HTTP error, SSRF block, or path rejection — report in 1 sentence.
-3. **Out of scope:** whole-codebase refactors, file writes/edits, multi-site research — say so, don't force it.
-4. **Never hallucinate** truncated code, brackets, or params.
+**Hard rules:** max 2 tool calls/turn, no retries on error (report in one sentence), out of scope for whole-codebase work/writes/multi-site research, never hallucinate past a truncation marker.
 
-## Output (always, apfel-mcp or not)
+## Output
 
-- 250 words max. Bullets/code blocks over prose.
-- Content ends abruptly or shows `[TRUNCATED]`: don't invent the rest — state "Data truncated at 6k chars. Omitted section: [topic]." Truncation is final, retrying returns the same cap.
+250 words max, bullets over prose. On visible truncation, say so (`"Data truncated at 6k chars. Omitted: [topic]."`) — don't invent what was cut, and don't retry, the cap is final.

@@ -16,7 +16,10 @@ Skill for Claude Code, Codex CLI, and Cursor. Built on [apfel](https://github.co
 | Local file/log/config read | `apfel-mcp-fs` |
 | Trivial single-file lookup, tokens are the point | Delegate the whole task to `apfel` |
 | Commit message, PR draft, regex, quick rewrite — drafting, not deciding | Delegate to `apfel` as a first pass, you still review it |
-| Multi-file reasoning, edits, anything needing judgment | Normal tools — apfel has no memory of your repo and a 4096-token window |
+| Secrets, `.env` values, credentials, PII, medical/financial data | Delegate to `apfel` regardless of budget — nothing leaves the machine |
+| Same transform over hundreds of items (configs, commits, log lines) | Loop `apfel` in a shell script, not N primary-model calls |
+| Branch diff too big for 4096 tokens — don't just skip apfel | `scripts/diff-chunk.sh main...HEAD` — chunks it, then a second apfel pass groups the per-file summaries into categories |
+| Multi-file reasoning, edits, anything needing judgment, **or writing actual code** | Normal tools — apfel has no memory of your repo, a 4096-token window, and shouldn't author code that ships |
 
 `apfel-mcp-ddg-search` exists upstream but is deliberately left out of this routing — not an oversight. Full per-tool detail (exact call text, limits): [`SKILL.md`](SKILL.md) + [`references/`](references/).
 
@@ -46,6 +49,7 @@ git clone https://github.com/mike-at-redspace/use-apfel-mcp.git ~/.agents/skills
 - **`scripts/ast-skeleton.py`** — code/JSON → signatures, exports, deps (~150 tokens); regex fallback if the file has a syntax error
 - **`scripts/log-filter.py`** — raw log → deduped errors, warnings, final status, timeline
 - **`scripts/relevance-rank.py`** — long doc → top 3 paragraphs matching a query, scored
+- **`scripts/diff-chunk.sh`** — branch diff too big for 4096 tokens → skeleton new files, delegate each modified file's diff individually, skip small ones, then a second `apfel` pass groups all the resulting one-liners into categories (Features/Fixes/Refactoring) — still text-on-text, no codebase reasoning, so it's fair game for another local call instead of falling to the primary model
 - **`references/`** — one cheatsheet per apfel/apfel-mcp tool, with exact call text
 
 ```bash
