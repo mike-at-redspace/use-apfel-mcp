@@ -25,22 +25,26 @@ Built on [apfel](https://github.com/Arthur-Ficial/apfel) and [apfel-mcp](https:/
 
 ## Why the preprocessing exists
 
-Apfel intentionally has a small context window and bounded tool output. Raw input is truncated at roughly 6000 characters, so passing a large file directly can leave the model with the beginning of a document rather than the part that matters.
+Apfel has a deliberately small context window and bounded tool output. Raw input is truncated at roughly 6000 characters, so passing a large file directly can leave the model with the beginning of a document rather than the part that matters.
 
-It also has a knowledge cutoff, so it isn't the right model for questions that depend on current or external knowledge, or for modern code generation — framework APIs, library versions, and current conventions drift faster than a local model's training data. What it's still good for is cutoff-agnostic, self-contained work where correctness depends on timeless logic, not what shipped last month:
+It also has a knowledge cutoff, which makes it a poor fit for anything that depends on current information or modern code context — framework APIs, library versions, and current conventions can change faster than a local model's training data.
 
-- Regex, from a plain-English description
-- Standard algorithm/data-structure logic — sorting, deduping, parsing a known format
-- Text/data reformatting — JSON ↔ CSV ↔ Markdown table, case conversion, whitespace cleanup
-- Stable shell/POSIX one-liners (`find`, `awk`, `sed`, `jq`)
-- Core language syntax that hasn't materially changed — loops, string ops, stdlib basics
-- Generic conceptual explanations — HTTP status codes, CLI flags, what an exception class generally means
+Where apfel works well is self-contained work where the answer doesn't depend on what's current:
 
-And for text you provide to it directly, it's still capable at generation, rewriting, and summarization of that text — the input is already in front of it, so cutoff doesn't matter.
+- Regex from a plain-English description
+- Standard algorithms and data structures — sorting, deduplication, parsing a known format
+- Text and data reformatting — JSON ↔ CSV ↔ Markdown tables, case conversion, whitespace cleanup
+- Stable shell/POSIX commands — `find`, `awk`, `sed`, `jq`
+- Core language syntax and standard-library basics
+- Generic concepts — HTTP status codes, CLI flags, exception classes
 
-That’s where the split works well: use apfel for transforming text you already have; use the primary model when the task requires broader context, current knowledge, or deeper reasoning.
+It's also useful when the input is already in front of it. Rewriting, summarizing, extracting, and reformatting text you provide don't depend on the model knowing what's current.
 
-The scripts reduce that input before it reaches the model:
+The split is straightforward: **use apfel when the task is self-contained; use the primary model when it needs current knowledge, broader context, or deeper reasoning.**
+
+### Preprocess before using context
+
+The scripts reduce large inputs before they reach the model:
 
 - `ast-skeleton.py` extracts code/JSON structure
 - `log-filter.py` reduces logs to errors, warnings, status, and timeline
@@ -49,7 +53,9 @@ The scripts reduce that input before it reaches the model:
 
 These transformations are deterministic and require no LLM tokens.
 
-The goal is simple: use a bounded local model where a bounded local model is enough, and keep larger-context reasoning for tasks that actually require it.
+The result is less raw input entering the primary context and fewer primary-model tokens spent on retrieval, filtering, and summarization.
+
+The goal is simple: **don't spend primary-model tokens on work a small local model can handle.**
 
 ## Install
 
