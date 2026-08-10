@@ -1,6 +1,6 @@
 # `apfel-mcp-search-and-fetch` cheatsheet
 
-The flagship compound tool — search *and* fetch in one call, trimmed to apfel's 4096-token window. Prefer this over chaining `apfel-mcp-ddg-search` + `apfel-mcp-url-fetch` (that's 2 calls where this is 1, and `ddg-search` is out of scope for this skill anyway — see [`SKILL.md`](../SKILL.md)).
+The flagship compound tool — search *and* fetch in one call, trimmed to apfel's 4096-token window. Prefer this over a separate search-then-fetch pair — that's 2 calls where this is 1.
 
 ## Exact call text
 

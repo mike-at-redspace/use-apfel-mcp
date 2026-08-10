@@ -1,72 +1,106 @@
 # use-apfel-mcp
 
-Stop spending your primary model's context on trivial lookups.
+Route small retrieval tasks through [apfel](https://github.com/Arthur-Ficial/apfel) instead of spending primary-model context on them.
 
-This skill teaches your agent to route bounded retrieval — a URL fetch, a log skim, a doc question, a single-file read — through [`apfel`](https://github.com/Arthur-Ficial/apfel)'s on-device model and a handful of deterministic compression scripts, and keep the expensive model's tokens for work that actually needs them. Use the big model for reasoning. Use apfel for "what was that URL again?"
+This skill keeps low-value retrieval out of the primary model’s context. Web searches, URL fetches, log skims, document extraction, and other bounded tasks are handled locally by apfel, leaving the primary context and token usage for the work that actually needs it.
 
-Skill for Claude Code, Codex CLI, and Cursor. Built on [apfel](https://github.com/Arthur-Ficial/apfel) + [apfel-mcp](https://github.com/Arthur-Ficial/apfel-mcp), both by [Arthur Ficial](https://github.com/Arthur-Ficial) — this repo is the routing/compression layer in front of them, not a replacement. `apfel` also runs standalone for plenty outside an agent session — clipboard rewrites ([apfel-clip](https://github.com/Arthur-Ficial/apfel-clip)), a hotkey overlay ([apfel-quick](https://github.com/Arthur-Ficial/apfel-quick)), on-device OCR ([auge](https://github.com/Arthur-Ficial/auge)), speech-to-text ([ohr](https://github.com/Arthur-Ficial/ohr)) — see apfel's own README for that catalog; this one stays scoped to what an agent does with it.
+For Claude Code, Codex CLI, and Cursor.
 
-## Routing, in one table
+Built on [apfel](https://github.com/Arthur-Ficial/apfel) and [apfel-mcp](https://github.com/Arthur-Ficial/apfel-mcp), both by [Arthur Ficial](https://github.com/Arthur-Ficial). This repo is the routing and preprocessing layer; it doesn't replace either project.
+
+## Routing
 
 | Task | Route |
 | :--- | :--- |
-| Code/JSON file, log, or long doc about to enter context | Compress first — `scripts/ast-skeleton.py` / `log-filter.py` / `relevance-rank.py` |
-| Search the web + read the result | `apfel-mcp-search-and-fetch` |
-| Known URL | `apfel-mcp-url-fetch` |
-| Local file/log/config read | `apfel-mcp-fs` |
-| Trivial single-file lookup, tokens are the point | Delegate the whole task to `apfel` |
-| Commit message, PR draft, regex, quick rewrite — drafting, not deciding | Delegate to `apfel` as a first pass, you still review it |
-| Secrets, `.env` values, credentials, PII, medical/financial data | Delegate to `apfel` regardless of budget — nothing leaves the machine |
-| Same transform over hundreds of items (configs, commits, log lines) | Loop `apfel` in a shell script, not N primary-model calls |
-| Branch diff too big for 4096 tokens — don't just skip apfel | `scripts/diff-chunk.sh main...HEAD` — chunks it, then a second apfel pass groups the per-file summaries into categories |
-| Multi-file reasoning, edits, anything needing judgment, **or writing actual code** | Normal tools — apfel has no memory of your repo, a 4096-token window, and shouldn't author code that ships |
+| Code, JSON, logs, or long docs | Preprocess before they enter the primary context |
+| Search the web and read a result | `apfel-mcp-search-and-fetch` |
+| Read a known URL | `apfel-mcp-url-fetch` |
+| Read a local file, log, or config | `apfel-mcp-fs` |
+| Small, self-contained lookup | Delegate to `apfel` |
+| Commit message, PR draft, regex, quick rewrite | Draft with `apfel`; review before using |
+| Secrets, credentials, PII, or other sensitive local data | Delegate to `apfel` to keep the input on-device |
+| Same transformation across many items | Loop `apfel` instead of making one primary-model call per item |
+| Large branch diff | `~/.agents/skills/use-apfel-mcp/scripts/diff-chunk.sh main...HEAD` |
+| Multi-file reasoning, edits, judgment, or production code | Keep it in the primary model |
 
-`apfel-mcp-ddg-search` exists upstream but is deliberately left out of this routing — not an oversight. Full per-tool detail (exact call text, limits): [`SKILL.md`](SKILL.md) + [`references/`](references/).
+## Why the preprocessing exists
 
-## Why this exists
+Apfel intentionally has a small context window and bounded tool output. Raw input is truncated at roughly 6000 characters, so passing a large file directly can leave the model with the beginning of a document rather than the part that matters.
 
-Apfel's context window is tiny on purpose. It truncates raw input at ~6000 chars — that's a feature, not a bug, but it means a raw file/log/doc dump lands you the *first* slice, not the *useful* slice. The scripts here extract signal deterministically — 0 LLM tokens, <100ms — before that truncation ever happens.
+It also has a knowledge cutoff, so it isn't the right model for questions that depend on current or external knowledge, or for modern code generation — framework APIs, library versions, and current conventions drift faster than a local model's training data. What it's still good for is cutoff-agnostic, self-contained work where correctness depends on timeless logic, not what shipped last month:
 
-Not for whole-codebase analysis or deep research. That's what your primary model is still for.
+- Regex, from a plain-English description
+- Standard algorithm/data-structure logic — sorting, deduping, parsing a known format
+- Text/data reformatting — JSON ↔ CSV ↔ Markdown table, case conversion, whitespace cleanup
+- Stable shell/POSIX one-liners (`find`, `awk`, `sed`, `jq`)
+- Core language syntax that hasn't materially changed — loops, string ops, stdlib basics
+- Generic conceptual explanations — HTTP status codes, CLI flags, what an exception class generally means
+
+And for text you provide to it directly, it's still capable at generation, rewriting, and summarization of that text — the input is already in front of it, so cutoff doesn't matter.
+
+That’s where the split works well: use apfel for transforming text you already have; use the primary model when the task requires broader context, current knowledge, or deeper reasoning.
+
+The scripts reduce that input before it reaches the model:
+
+- `ast-skeleton.py` extracts code/JSON structure
+- `log-filter.py` reduces logs to errors, warnings, status, and timeline
+- `relevance-rank.py` selects relevant sections from long documents
+- `diff-chunk.sh` breaks large diffs into small, independent summaries
+
+These transformations are deterministic and require no LLM tokens.
+
+The goal is simple: use a bounded local model where a bounded local model is enough, and keep larger-context reasoning for tasks that actually require it.
 
 ## Install
 
-Clone into `~/.agents/skills/` — the canonical, cross-runtime location — then symlink for whichever tool you use:
+Clone into `~/.agents/skills/`:
 
 ```bash
 git clone https://github.com/mike-at-redspace/use-apfel-mcp.git ~/.agents/skills/use-apfel-mcp
 ```
 
+Then configure the runtime you use:
+
 | Tool | Setup |
 | :--- | :--- |
 | **Claude Code** | `ln -s ../../.agents/skills/use-apfel-mcp ~/.claude/skills/use-apfel-mcp` |
-| **Codex CLI** | Nothing — reads `~/.agents/skills/` natively |
-| **Cursor** | Copy/symlink `.cursor/rules/use-apfel-mcp.mdc` into your project's `.cursor/rules/`, or paste it into Settings → Rules → User Rules for a global setup |
+| **Codex CLI** | Reads `~/.agents/skills/` directly |
+| **Cursor** | Copy or symlink `.cursor/rules/use-apfel-mcp.mdc` into `.cursor/rules/`, or add it to User Rules |
 
-## What's inside
+The skill only provides the routing instructions. The corresponding `apfel` and `apfel-mcp` installations and MCP configuration still need to be available to the agent.
 
-- **[SKILL.md](SKILL.md)** — the decision rules: when to preprocess, when to delegate a whole task to `apfel`, the tool-routing table
-- **`scripts/ast-skeleton.py`** — code/JSON → signatures, exports, deps (~150 tokens); regex fallback if the file has a syntax error
-- **`scripts/log-filter.py`** — raw log → deduped errors, warnings, final status, timeline
-- **`scripts/relevance-rank.py`** — long doc → top 3 paragraphs matching a query, scored
-- **`scripts/diff-chunk.sh`** — branch diff too big for 4096 tokens → skeleton new files, delegate each modified file's diff individually, skip small ones, then a second `apfel` pass groups all the resulting one-liners into categories (Features/Fixes/Refactoring) — still text-on-text, no codebase reasoning, so it's fair game for another local call instead of falling to the primary model
-- **`references/`** — one cheatsheet per apfel/apfel-mcp tool, with exact call text
+## What's included
+
+- **[`SKILL.md`](SKILL.md)** — routing rules, delegation criteria, and tool usage
+- **`scripts/ast-skeleton.py`** — reduces code/JSON to signatures, exports, and dependencies
+- **`scripts/log-filter.py`** — reduces logs to relevant errors, warnings, status, and timeline
+- **`scripts/relevance-rank.py`** — selects the most relevant sections of a long document
+- **`scripts/diff-chunk.sh`** — breaks a large branch diff into bounded per-file summaries, then groups the results
+- **`references/`** — per-tool notes with limits and example invocations
+
+Run the script self-tests:
 
 ```bash
-python3 scripts/ast-skeleton.py --selftest   # every script self-checks
-cat src/Button.tsx | python3 scripts/ast-skeleton.py
-python3 scripts/log-filter.py build.log
-python3 scripts/relevance-rank.py "OKLCH color config" < docs.md
+SKILL=~/.agents/skills/use-apfel-mcp
+python3 "$SKILL/scripts/ast-skeleton.py" --selftest
 ```
 
-For PDF/Office/HTML input, the scripts expect text/markdown — pipe through [`markitdown`](https://github.com/microsoft/markitdown) first. The skill checks `command -v markitdown` before reaching for it and uses it automatically if present; if it's missing you'll get a one-line nudge instead of a silent raw-binary read. Not bundled here — `pipx install markitdown` to add it.
+Example (commands work from any directory — the agent's shell `cwd` is usually your project root, not the skill folder, so paths below are absolute):
 
-## Limitations, up front
+```bash
+cat src/Button.tsx | python3 "$SKILL/scripts/ast-skeleton.py"
+python3 "$SKILL/scripts/log-filter.py" build.log
+python3 "$SKILL/scripts/relevance-rank.py" "OKLCH color config" < docs.md
+```
 
-- `apfel-mcp-fs` is read-only, one file at a time, 6000-char hard cap, allowlisted to `APFEL_MCP_FS_ROOTS`. Not a general filesystem tool — see [`references/apfel-mcp-fs.md`](references/apfel-mcp-fs.md).
-- The `apfel` CLI has no explicit tool-call flag. A vague prompt lets the on-device model invent a tool name that doesn't exist (`No MCP server provides tool 'X'`) — name the tool explicitly, or use `-f <path>` to skip the MCP round-trip. See [`references/apfel-cli.md`](references/apfel-cli.md).
-- No YAML support in the scripts — Python's stdlib has no YAML parser.
-- Free and on-device (no API keys, no cloud) — that much is verifiable from apfel's own README. Making a bigger claim than that (e.g. "greener") isn't backed by anything here, so we don't.
+For PDF, Office, or HTML input, pipe the content through [`markitdown`](https://github.com/microsoft/markitdown) first. If `markitdown` is installed, the skill can detect and use it; otherwise it reports the missing dependency rather than attempting to read the raw binary.
+
+## Limitations
+
+- `apfel-mcp-fs` is read-only, operates on one file at a time, and has a 6000-character limit. Paths are restricted by `APFEL_MCP_FS_ROOTS`.
+- The `apfel` CLI does not expose an explicit tool-call flag. When using MCP through the CLI, name the intended tool explicitly or use `-f <path>` to avoid the MCP round-trip. See [`references/apfel-cli.md`](references/apfel-cli.md).
+- The preprocessing scripts don't parse YAML.
+- Apfel runs on-device and doesn't require API keys. See the upstream [apfel README](https://github.com/Arthur-Ficial/apfel) for its current capabilities and configuration.
 
 ## License
 

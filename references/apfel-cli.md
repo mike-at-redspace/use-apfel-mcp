@@ -17,6 +17,7 @@ apfel --count-tokens <prompt>  Preflight token count (no inference)
 | Goal | Use | Why |
 | :--- | :--- | :--- |
 | Read a known local file | `-f <path> "<prompt>"` | Attaches content directly — no MCP tool-call guess, no chance of a hallucinated tool name |
+| Feed it output that doesn't exist as a file (a diff, build log, curl response) | Pipe: `git diff \| apfel "<prompt>"` | Nothing on disk to attach — `-f` needs a real path, piping is the only option for generated output |
 | Call a specific `apfel-mcp` tool | Name it explicitly in the prompt: `"Call the read_file tool with path=..."` | The CLI has no `--tool`/`--arg` flag; the model must parse the tool name from your prompt, and will invent one if you're vague |
 | Check budget before spending it | `--count-tokens --strict <prompt>` | Exits 4 if over budget — cheaper than finding out mid-response |
 | Need machine-parseable output | `--schema <path>` | Guarantees valid JSON matching your schema, instead of hoping the model formats it right |

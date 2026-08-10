@@ -10,13 +10,13 @@ Token-efficient reading and tool routing for tight/on-device (~4096-token) budge
 
 ## Preprocess before reading raw
 
-If a code file, log, or doc/URL content is going to land in context and it's more than ~1-2k chars, don't read it whole — pipe it through the matching script in `scripts/` (resolve relative to this rule's own directory, e.g. `~/.agents/skills/use-apfel-mcp/scripts/` if installed via the standard path):
+If a code file, log, or doc/URL content is going to land in context and it's more than ~1-2k chars, don't read it whole — pipe it through the matching script. Your shell's `cwd` is your project, not this skill's folder, so use the absolute path (`$SKILL` = `~/.agents/skills/use-apfel-mcp` if installed via the standard path):
 
 | Input | Tool | Effect |
 | :--- | :--- | :--- |
-| Code/JSON file | `scripts/ast-skeleton.py` | Signatures/exports/deps only (~150 tokens) |
-| Log/build output | `scripts/log-filter.py` | Deduped errors, warnings, final status, timeline |
-| Long doc/article | `scripts/relevance-rank.py "<query>"` | Top 3 paragraphs matching the query, scored |
+| Code/JSON file | `$SKILL/scripts/ast-skeleton.py` | Signatures/exports/deps only (~150 tokens) |
+| Log/build output | `$SKILL/scripts/log-filter.py` | Deduped errors, warnings, final status, timeline |
+| Long doc/article | `$SKILL/scripts/relevance-rank.py "<query>"` | Top 3 paragraphs matching the query, scored |
 
 Skip when content is already short, or you need an exact-line edit (a skeleton drops line numbers/bodies).
 

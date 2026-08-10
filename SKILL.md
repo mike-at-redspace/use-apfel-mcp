@@ -5,68 +5,58 @@ description: Use when operating under a tight or on-device token budget (~4096 t
 
 # use-apfel-mcp
 
-Token-efficient reading, delegation, and tool routing for tight/on-device (~4096-token) budgets — works whether or not `apfel-mcp` tools are connected.
+Route retrieval and bounded text work through `apfel` (on-device, ~4096 tokens) instead of spending primary-model tokens on it. Routing layer only — confirm `apfel`/`apfel-mcp` are actually installed (`command -v apfel`; `ToolSearch` for apfel-mcp tools) before delegating. Built on [apfel](https://github.com/Arthur-Ficial/apfel) + [apfel-mcp](https://github.com/Arthur-Ficial/apfel-mcp) by [Arthur Ficial](https://github.com/Arthur-Ficial). Cheatsheets: [`references/`](references/).
 
-Built for [**apfel**](https://github.com/Arthur-Ficial/apfel) + [**apfel-mcp**](https://github.com/Arthur-Ficial/apfel-mcp), both by [Arthur Ficial](https://github.com/Arthur-Ficial). `brew install apfel` / `brew install arthur-ficial/tap/apfel-mcp`. Per-tool cheatsheets live in [`references/`](references/) — this file is the decision rules.
+## Always, first: preprocess before anything reads raw
 
-## Delegate whole tasks to apfel
+Content over ~1-2k chars entering context gets compressed before it's read — regardless of which branch below handles the actual task, sensitive or not, since these run 100% locally too. Your shell's `cwd` is usually the project you're working in, not this skill's folder — use the absolute path below (`$SKILL` = `~/.agents/skills/use-apfel-mcp`, wherever your runtime symlinks from), not a bare `scripts/...` that only resolves if `cwd` happens to be here:
 
-For a bounded task that needs no multi-file reasoning and no judgment about this repo, hand it to `apfel` instead of spending the primary model's tokens.
+| Input | Tool |
+| :--- | :--- |
+| Code/JSON file | `$SKILL/scripts/ast-skeleton.py` — signatures/exports/deps (~150 tokens); regex fallback on syntax errors |
+| Log/build output | `$SKILL/scripts/log-filter.py` — deduped errors/warnings/status/timeline |
+| Long doc | `$SKILL/scripts/relevance-rank.py "<query>"` — top 3 paragraphs, scored |
+| Branch diff too big for 4096 tokens | `$SKILL/scripts/diff-chunk.sh <range>` — per-file, then a *second* apfel pass groups the digest (still text-on-text, not codebase reasoning) |
+| PDF/Office/HTML | `command -v markitdown` first — found → pipe through it; missing → say so, don't read the raw binary, don't auto-install |
+
+Skip only when content's already short, or you need an exact-line edit (a skeleton drops line numbers).
+
+## Then: decide where the task itself goes
 
 | Trigger | Action |
 | :--- | :--- |
 | Single-file/log/doc lookup | `apfel -f <path> "<question>"` |
+| Sensitive content (secrets, `.env`, credentials, PII, medical/financial) | Delegate regardless of budget — the point is nothing leaves the machine, not cost |
 | User asked to save tokens/cost | Delegate automatically, no need to ask each time — say what got delegated |
-| Caveman/terse mode active | Ask once per session before delegating — terse ≠ "hand this to another model" |
-| Content is sensitive (secrets, `.env`, credentials, PII, medical/financial) | Delegate automatically *regardless of budget* — the point is nothing leaves the machine, not cost |
-| Same transform over hundreds of items | Loop `apfel` in a shell script, not N primary-model calls — avoids rate limits too |
-| Branch diff too big for apfel's 4096 tokens *and* too big to read raw | Don't skip apfel — chunk it: `scripts/diff-chunk.sh main...HEAD` skeletons new files, delegates each modified file's own diff individually, leaves small diffs in `--stat`, then runs a *second* apfel pass to group the resulting one-liners into categories. Grouping the summaries is still text-on-text, not codebase reasoning — only skip apfel for a step that needs real repo judgment (e.g. "is this breaking"). |
-| Multi-file reasoning, edits, judgment calls, **or writing actual code** | Keep on the primary model — apfel has a 4096-token window, no memory of this repo, and shouldn't author code that ships (correctness stakes, not a draft-and-review task) |
-
-**Generation from what's already on screen** — bounded drafts, still reviewed before they ship:
-
-| Task | Command |
-| :--- | :--- |
-| Commit message from staged diff | `git diff --staged \| apfel "Write a conventional commit message. Output only the message."` |
-| Diff review against team conventions | `git diff HEAD~1 \| apfel -f CONVENTIONS.md "Review this diff against our conventions"` |
-| Release notes from commit log | `git log v1.0.0..v1.1.0 --oneline \| apfel "Group into Features, Bug Fixes, Refactoring"` |
-| Explain a failed build | `npm run build 2>&1 \| apfel "Explain why this failed in 2 sentences"` |
-| JSON API response → TypeScript interface | `curl -s api.example.com/item/1 \| apfel --code "TS interface named Item for this JSON"` |
-| Regex from plain English | `apfel "Regex for a US phone number, both (555) 123-4567 and 555-123-4567"` |
-
-All verified against `apfel`'s real flags/[EXAMPLES.md](https://github.com/Arthur-Ficial/apfel/tree/main/docs/EXAMPLES.md) — `-f` attaches file(s) to a prompt, `--code` returns bare code (exit 7 if empty), `--schema` guarantees valid JSON, `-o json` for scripting. See [`references/apfel-cli.md`](references/apfel-cli.md).
-
-## Preprocess before reading raw
-
-Content over ~1-2k chars headed into context: pipe it through the matching script, not a raw `cat`/`Read` or a hand-rolled `grep`/`sed`.
-
-| Input | Tool |
-| :--- | :--- |
-| Code or JSON file | `scripts/ast-skeleton.py` — signatures/exports/deps only (~150 tokens); regex fallback on syntax errors |
-| Log/build output | `scripts/log-filter.py` — deduped errors, warnings, final status, timeline |
-| Long doc/article | `scripts/relevance-rank.py "<query>"` — top 3 paragraphs, scored |
-| PDF/Office/HTML | `command -v markitdown` first — found → pipe through it into the scripts above; missing → say so in one line, don't silently read the raw binary, don't auto-install |
+| Caveman/terse mode active | Ask once per session first — terse ≠ "hand this to another model" |
+| Same transform over hundreds of items | Loop `apfel`, not N primary-model calls — avoids rate limits too |
+| Bounded draft from on-screen text (commit message, PR notes, diff review, build-failure explanation, JSON→TS) | Delegate — still reviewed before it ships, see examples below |
+| Cutoff-agnostic (regex, algorithms/data structures, reformatting, stable shell one-liners, generic explanations) | Delegate — correctness here is timeless, not dependent on training data |
+| Multi-file reasoning, edits, judgment calls, or code depending on current framework/library APIs | **Primary model** — apfel's cutoff and lack of repo memory make this a correctness risk, not a draft-and-review task |
 
 ```bash
-cat src/Button.tsx | python3 scripts/ast-skeleton.py
-python3 scripts/log-filter.py build.log
-python3 scripts/relevance-rank.py "OKLCH color config" < docs.md
-markitdown design-spec.pdf | python3 scripts/relevance-rank.py "OKLCH color config"
+git diff --staged | apfel "Write a conventional commit message. Output only the message."
+git diff HEAD~1 | apfel -f CONVENTIONS.md "Review this diff against our conventions"
+git log v1.0.0..v1.1.0 --oneline | apfel "Group into Features, Bug Fixes, Refactoring"
+npm run build 2>&1 | apfel "Explain why this failed in 2 sentences"
+curl -s api.example.com/item/1 | apfel --code "TS interface named Item for this JSON"
+apfel "Regex for a US phone number, both (555) 123-4567 and 555-123-4567"
+apfel --code "python function that deduplicates a list preserving order"
 ```
 
-Stdlib-only (no YAML — no stdlib parser), pipe-friendly, <100ms typical. Skip when content's already short, or you need an exact-line edit (a skeleton drops line numbers/bodies).
+Flags are real, confirmed against apfel's own [EXAMPLES.md](https://github.com/Arthur-Ficial/apfel/tree/main/docs/EXAMPLES.md); prompts above are illustrative, not all verbatim. See [`references/apfel-cli.md`](references/apfel-cli.md).
 
-## If apfel-mcp tools are present, route through them
+**If `apfel` itself fails** (non-zero exit, crash, timeout, or `--code` exits 7 on an empty response): don't retry with a reworded prompt — say so in one line (`apfel failed/unavailable, falling back to primary model`) and do that step yourself instead. One exception: `command -v apfel` failing at the very start just means it's not installed — that's an availability check, not a failure, so report it once and skip delegation for the rest of the turn rather than repeating the notice per task.
 
-`apfel-mcp` installs four real MCP servers: `apfel-mcp-search-and-fetch`, `apfel-mcp-url-fetch`, `apfel-mcp-fs`, `apfel-mcp-ddg-search` (deliberately excluded from this routing). Names may show up under a different MCP-server prefix per session (e.g. `mcp__search-and-fetch__search`) and are often deferred — `ToolSearch` for `apfel`/`search-and-fetch`/`4096` before assuming none are connected.
+## If apfel-mcp tools are present, route fetches through them
+
+Real MCP servers, may appear under a different prefix per session (e.g. `mcp__search-and-fetch__search`) and are often deferred — `ToolSearch` for `apfel`/`search-and-fetch`/`4096` before assuming none are connected. Name the real tool explicitly in any prompt to these — vague phrasing lets the small model invent a tool name that doesn't exist (symptom: `No MCP server provides tool 'X'`).
 
 | Scenario | Tool | Limit | Cheatsheet |
 | :--- | :--- | :--- | :--- |
 | Search + read page | `apfel-mcp-search-and-fetch` | 1 call not 2, ~5k chars | [search-and-fetch](references/apfel-mcp-search-and-fetch.md) |
 | Known URL | `apfel-mcp-url-fetch` | Strips DOM, 6k chars | [url-fetch](references/apfel-mcp-url-fetch.md) |
 | Local file/log/config | `apfel-mcp-fs` | Read-only, 6k chars, allowlisted | [fs](references/apfel-mcp-fs.md) |
-
-Name the real tool explicitly in any prompt to these — the small model invents a plausible-but-wrong tool name from vague phrasing (symptom: `No MCP server provides tool 'X'`).
 
 **Hard rules:** max 2 tool calls/turn, no retries on error (report in one sentence), out of scope for whole-codebase work/writes/multi-site research, never hallucinate past a truncation marker.
 
